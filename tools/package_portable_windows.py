@@ -97,7 +97,12 @@ def package(binary, runtime, output):
         root = Path(temp) / "artex-windows-amd64-portable"
         root.mkdir()
         shutil.copy2(binary, root / "artex.exe")
-        shutil.copy2(ROOT / "start.bat", root)
+        # cmd.exe must receive ASCII with CRLF, regardless of Git checkout rules
+        # or the user's console code page. Go's Unicode console output is separate.
+        launcher = (ROOT / "start.bat").read_text(encoding="ascii")
+        (root / "start.bat").write_bytes(
+            launcher.replace("\r\n", "\n").replace("\n", "\r\n").encode("ascii")
+        )
         shutil.copy2(ROOT / "README_PORTABLE.md", root)
         shutil.copytree(runtime, root / "postgres")
         shutil.copytree(ROOT / "skills", root / "skills")

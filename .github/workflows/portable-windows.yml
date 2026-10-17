@@ -52,6 +52,8 @@ jobs:
           go build -tags embedui -trimpath -ldflags "-s -w -X main.version=portable-${{ github.sha }}" -o dist/artex.exe ./cmd/artex
       - name: Create offline portable package
         run: python tools/package_portable_windows.py package --binary dist/artex.exe --runtime "${{ runner.temp }}/postgres" --output dist/artex-windows-amd64-portable.zip
+      - name: Check batch launcher in GBK and UTF-8 consoles
+        run: python tools/check_portable_launcher.py dist/artex-windows-amd64-portable.zip
       - name: Smoke test the packaged application
         run: python tools/smoke_portable_windows.py dist/artex-windows-amd64-portable.zip
       - uses: actions/upload-artifact@v4
