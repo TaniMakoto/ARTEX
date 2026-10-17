@@ -15,10 +15,12 @@ import (
 	"time"
 
 	"github.com/Autumn-27/artex/agent"
+	"github.com/Autumn-27/artex/config"
 	pgdb "github.com/Autumn-27/artex/db"
 	"github.com/Autumn-27/artex/enrich"
 	"github.com/Autumn-27/artex/guard"
 	"github.com/Autumn-27/artex/intercept"
+	"github.com/Autumn-27/artex/internal/localpostgres"
 	"github.com/Autumn-27/artex/traffic"
 	actool "github.com/Autumn-27/norma/tool"
 )
@@ -218,6 +220,7 @@ type DeleteTaskResult struct {
 type Manager struct {
 	dir         string
 	pg          *pgdb.DB
+	localPG     *localpostgres.Server
 	assets      *pgdb.AssetStore
 	traffic     *traffic.Traffic       // process-wide recording proxy (may be nil)
 	enrich      *enrich.Engine         // engine-side asset auto-completion (DNS/HTTP)
@@ -354,10 +357,27 @@ func NewManager(dir, proxyAddr string) (*Manager, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, err
 	}
-	dsn, source, err := pgdb.DSN()
-	if err != nil {
-		return nil, err
+	var localPG *localpostgres.Server
+	var dsn, source string
+	var err error
+	if config.UseLocalPostgres() {
+		localPG, err = localpostgres.Start(dir, config.PostgresRuntimeDir())
+		if err != nil {
+			return nil, err
+		}
+		dsn, source = localPG.DSN(), "随包本地数据库（无需安装，数据保存在 "+filepath.Join(dir, "postgres")+"）"
+	} else {
+		dsn, source, err = pgdb.DSN()
+		if err != nil {
+			return nil, err
+		}
 	}
+	ready := false
+	defer func() {
+		if !ready && localPG != nil {
+			_ = localPG.Close()
+		}
+	}()
 	log.Printf("[pg] 数据库配置来源: %s", source)
 	pg, err := pgdb.Open(dsn)
 	if err != nil {
@@ -373,7 +393,7 @@ func NewManager(dir, proxyAddr string) (*Manager, error) {
 	if err := pg.EnsureLLMUsageTable(); err != nil {
 		log.Printf("[llmusage] create table: %v", err)
 	}
-	m := &Manager{dir: dir, pg: pg, assets: pg.Assets(), tasks: map[string]*Task{}, interceptor: intercept.New(pg)}
+	m := &Manager{dir: dir, pg: pg, localPG: localPG, assets: pg.Assets(), tasks: map[string]*Task{}, interceptor: intercept.New(pg)}
 	if proxyAddr != "" {
 		tr, err := traffic.Open(filepath.Join(dir, "traffic"), proxyAddr)
 		if err != nil {
@@ -443,6 +463,7 @@ func NewManager(dir, proxyAddr string) (*Manager, error) {
 	// Reconcile the seeded browser MCP with the persisted capture state, so a
 	// restart with capture already on keeps Playwright routed through the proxy.
 	m.syncBrowserMCPProxy()
+	ready = true
 	return m, nil
 }
 
@@ -806,7 +827,11 @@ func (m *Manager) Close() error {
 	if m.traffic != nil {
 		m.traffic.Close()
 	}
-	return m.pg.Close()
+	err := m.pg.Close()
+	if m.localPG != nil {
+		err = errors.Join(err, m.localPG.Close())
+	}
+	return err
 }
 
 // isTerminalStatus reports whether a task status is terminal (done/failed/timeout).

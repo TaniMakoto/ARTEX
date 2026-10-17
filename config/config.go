@@ -15,6 +15,7 @@ import (
 // Database is the PostgreSQL connection config. Either set DSN directly, or set
 // the component fields and a DSN is assembled from them.
 type Database struct {
+	Driver   string `json:"driver"`
 	DSN      string `json:"dsn"`
 	Host     string `json:"host"`
 	Port     int    `json:"port"`
@@ -139,6 +140,9 @@ func PostgresDSN() (dsn, source string, err error) {
 		return v, "环境变量 ARTEX_PG_DSN", nil
 	}
 	db := Load().Database
+	if db.Driver != "" && db.Driver != "postgres" && db.Driver != "postgresql" && db.Driver != "embedded" {
+		return "", "", fmt.Errorf("不支持 database.driver=%q；免安装 Windows 包请使用 embedded，外部数据库使用 postgres", db.Driver)
+	}
 	if d := strings.TrimSpace(db.DSN); d != "" {
 		return d, "配置文件 " + Path() + " (database.dsn)", nil
 	}
@@ -146,6 +150,28 @@ func PostgresDSN() (dsn, source string, err error) {
 		return db.buildDSN(), "配置文件 " + Path() + " (database 字段)", nil
 	}
 	return "", "", fmt.Errorf("未找到数据库配置：环境变量 ARTEX_PG_DSN 未设置，且配置文件 %s 未提供 database（dsn 或 host/user/dbname）。请创建该配置文件或设置环境变量后重试", Path())
+}
+
+// UseLocalPostgres selects the bundled runtime only when explicitly requested,
+// or when there is no external configuration. An environment DSN always wins.
+func UseLocalPostgres() bool {
+	if strings.TrimSpace(os.Getenv("ARTEX_PG_DSN")) != "" {
+		return false
+	}
+	d := Load().Database
+	if d.Driver == "embedded" {
+		return true
+	}
+	return d.Driver == "" && d.DSN == "" && d.Host == "" && d.User == "" && d.DBName == "" && d.Port == 0
+}
+
+// PostgresRuntimeDir permits a shared, pre-extracted runtime during development.
+// Distributed packages find their runtime next to artex.exe without PATH edits.
+func PostgresRuntimeDir() string {
+	if path := strings.TrimSpace(os.Getenv("ARTEX_POSTGRES_DIR")); path != "" {
+		return path
+	}
+	return filepath.Join(BaseDir(), "postgres")
 }
 
 func (d Database) buildDSN() string {

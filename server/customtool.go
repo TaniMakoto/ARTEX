@@ -186,7 +186,14 @@ const settingPythonInterp = "python_interpreter"
 func detectPython() string {
 	for _, c := range []string{"python3", "python"} {
 		if p, err := exec.LookPath(c); err == nil {
-			return p
+			// WindowsApps may expose a python3.exe Store alias even when no
+			// interpreter is installed. Do not persist that unusable launcher.
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			out, err := exec.CommandContext(ctx, p, "--version").CombinedOutput()
+			cancel()
+			if err == nil && strings.HasPrefix(strings.TrimSpace(string(out)), "Python ") {
+				return p
+			}
 		}
 	}
 	return ""
