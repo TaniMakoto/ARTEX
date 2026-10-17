@@ -11,6 +11,8 @@ import (
 
 func configureCommand(cmd *exec.Cmd) {}
 
+func startPostgres(cmd *exec.Cmd) error { return cmd.Start() }
+
 func containProcess(process *os.Process) (func(), error) { return func() {}, nil }
 
 func lockFile(file *os.File) error {

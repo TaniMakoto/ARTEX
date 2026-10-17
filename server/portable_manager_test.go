@@ -18,7 +18,7 @@ func TestPortableManagerPersistence(t *testing.T) {
 	t.Setenv("ARTEX_CONFIG", configPath)
 	t.Setenv("ARTEX_PG_DSN", "")
 	t.Setenv("ARTEX_POSTGRES_DIR", runtimeDir)
-	data := filepath.Join(t.TempDir(), "中文 data with spaces")
+	data := filepath.Join(t.TempDir(), "data with spaces")
 	m, err := NewManager(data, "")
 	if err != nil {
 		t.Fatal(err)

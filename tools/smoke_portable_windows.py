@@ -15,7 +15,9 @@ import zipfile
 
 
 def main():
-    with tempfile.TemporaryDirectory(prefix="artex-中文 portable-") as temp:
+    # PostgreSQL's Windows build uses the system code page for paths. Its
+    # installation/data paths must be ASCII; SQL data remains UTF-8.
+    with tempfile.TemporaryDirectory(prefix="artex portable-") as temp:
         workspace = Path(temp)
         with zipfile.ZipFile(sys.argv[1]) as archive:
             archive.extractall(workspace)
@@ -28,7 +30,7 @@ def main():
         env.pop("ARTEX_POSTGRES_DIR", None)
         env["ARTEX_CONFIG"] = str(root / "config.json")
         env["ARTEX_SKILL_DIR"] = str(root / "skills")
-        data = workspace / "持久数据 data"
+        data = workspace / "persistent data"
         log_path = workspace / "smoke.log"
         with log_path.open("wb") as log:
             process = subprocess.Popen(

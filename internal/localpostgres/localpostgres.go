@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/url"
 	"os"
@@ -31,6 +32,7 @@ type Server struct {
 	exited     chan struct{}
 	waitErr    error
 	log        *os.File
+	logStart   int64
 	lock       *os.File
 	releaseJob func()
 	once       sync.Once
@@ -88,6 +90,11 @@ func Start(dataDir, binaries string) (_ *Server, err error) {
 	if err != nil {
 		return nil, err
 	}
+	logInfo, err := s.log.Stat()
+	if err != nil {
+		return nil, err
+	}
+	s.logStart = logInfo.Size()
 	// Release the reservation immediately before starting postgres. If another
 	// process wins the port, startup fails visibly instead of attaching to it.
 	listener, err := net.Listen("tcp4", "127.0.0.1:0")
@@ -101,7 +108,7 @@ func Start(dataDir, binaries string) (_ *Server, err error) {
 	s.cmd = exec.Command(executable(binaries, "postgres"), "-D", s.data, "-h", "127.0.0.1", "-p", strconv.Itoa(port), "-c", "unix_socket_directories=", "-c", "max_connections=100")
 	configureCommand(s.cmd)
 	s.cmd.Stdout, s.cmd.Stderr = s.log, s.log
-	if err := s.cmd.Start(); err != nil {
+	if err := startPostgres(s.cmd); err != nil {
 		return nil, fmt.Errorf("启动随包数据库失败: %w", err)
 	}
 	s.exited = make(chan struct{})
@@ -123,7 +130,7 @@ func Start(dataDir, binaries string) (_ *Server, err error) {
 	for {
 		select {
 		case <-s.exited:
-			return nil, fmt.Errorf("随包数据库提前退出（详见 %s）: %v", s.log.Name(), s.waitErr)
+			return nil, s.startupError("随包数据库提前退出", s.waitErr, password)
 		default:
 		}
 		if err = conn.PingContext(ctx); err == nil {
@@ -131,9 +138,9 @@ func Start(dataDir, binaries string) (_ *Server, err error) {
 		}
 		select {
 		case <-ctx.Done():
-			return nil, fmt.Errorf("随包数据库启动超时（详见 %s）: %w", s.log.Name(), err)
+			return nil, s.startupError("随包数据库启动超时", err, password)
 		case <-s.exited:
-			return nil, fmt.Errorf("随包数据库提前退出（详见 %s）: %v", s.log.Name(), s.waitErr)
+			return nil, s.startupError("随包数据库提前退出", s.waitErr, password)
 		case <-time.After(100 * time.Millisecond):
 		}
 	}
@@ -210,6 +217,35 @@ func initialize(root, data, binaries, password string) error {
 }
 
 func (s *Server) DSN() string { return s.dsn }
+
+// Include only this startup's bounded log tail. CI removes its temporary data
+// directory, so reporting just the filename loses the actual failure reason.
+func (s *Server) startupError(message string, cause error, password string) error {
+	const limit = 8 * 1024
+	err := fmt.Errorf("%s（详见 %s）: %w", message, s.log.Name(), cause)
+	file, readErr := os.Open(s.log.Name())
+	if readErr != nil {
+		return err
+	}
+	defer file.Close()
+	info, readErr := file.Stat()
+	if readErr != nil {
+		return err
+	}
+	offset := max(s.logStart, info.Size()-limit)
+	if _, readErr := file.Seek(offset, io.SeekStart); readErr != nil {
+		return err
+	}
+	tail, readErr := io.ReadAll(io.LimitReader(file, limit))
+	if readErr != nil || len(tail) == 0 {
+		return err
+	}
+	text := strings.TrimSpace(string(tail))
+	if password != "" {
+		text = strings.ReplaceAll(text, password, "[REDACTED]")
+	}
+	return fmt.Errorf("%w\nPostgreSQL: %s", err, text)
+}
 
 func (s *Server) Close() error {
 	s.once.Do(func() {

@@ -53,15 +53,23 @@ func BaseDir() string {
 	return dir
 }
 
-// isGoRunDir reports whether dir is where `go run` parked its executable: under
-// the system temp dir (cache miss), or anywhere inside a Go build cache
+// isGoRunDir reports whether dir is where `go run` parked its executable: in a
+// go-build<digits> directory under temp, or inside a Go build cache
 // (…/go-build/…, the cache-hit case — NOT under os.TempDir(), which is why the
 // old temp-only check failed intermittently). In both cases the binary is
 // throwaway, so config/data must resolve against the CWD.
 func isGoRunDir(dir string) bool {
 	if tmp := os.TempDir(); tmp != "" {
 		if rel, err := filepath.Rel(tmp, dir); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-			return true
+			// A portable release may itself be unpacked under Temp. Only Go's
+			// generated work directory makes an executable throwaway.
+			for _, seg := range strings.Split(filepath.ToSlash(rel), "/") {
+				if suffix, ok := strings.CutPrefix(seg, "go-build"); ok && suffix != "" {
+					if _, err := strconv.ParseUint(suffix, 10, 64); err == nil {
+						return true
+					}
+				}
+			}
 		}
 	}
 	for _, seg := range strings.Split(filepath.ToSlash(dir), "/") {

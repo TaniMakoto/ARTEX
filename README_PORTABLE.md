@@ -3,6 +3,10 @@
 完整解压 `artex-windows-amd64-portable.zip`，双击 `start.bat`，然后访问
 <http://localhost:8787>。也可以直接运行 `artex.exe`。
 
+请使用纯英文路径解压和保存数据，例如 `D:\Apps\ARTEX`（允许空格）。
+随包 PostgreSQL 的 Windows 路径处理受系统代码页限制，中文安装/数据目录可能导致
+初始化失败；数据库内容本身使用 UTF-8，可以正常保存中文。
+
 不需要安装 Docker、PostgreSQL、Go 或 Node.js，也不需要管理员权限。
 压缩包已经包含网页和免安装 PostgreSQL 17 运行组件，启动时不会下载数据库。
 程序会自动创建数据库、选择本机空闲端口，并在退出时停止数据库。

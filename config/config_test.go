@@ -40,3 +40,23 @@ func TestPostgresDSNPrecedence(t *testing.T) {
 		t.Fatalf("file dsn verbatim, got %q err %v", got, err)
 	}
 }
+
+func TestIsGoRunDir(t *testing.T) {
+	for _, tt := range []struct {
+		name, dir string
+		want      bool
+	}{
+		{"Go work directory", filepath.Join(os.TempDir(), "go-build123456", "b001", "exe"), true},
+		{"Go build cache", filepath.Join(t.TempDir(), "go-build", "ab"), true},
+		{"portable in Temp", filepath.Join(t.TempDir(), "中文 portable", "artex-windows-amd64-portable"), false},
+		{"Temp root", os.TempDir(), false},
+		{"similar directory name", filepath.Join(t.TempDir(), "go-build-release"), false},
+		{"normal release", filepath.Join("D:", "Apps", "ARTEX"), false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isGoRunDir(tt.dir); got != tt.want {
+				t.Fatalf("isGoRunDir(%q) = %v, want %v", tt.dir, got, tt.want)
+			}
+		})
+	}
+}
