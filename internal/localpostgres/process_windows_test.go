@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"os/exec"
+	"runtime"
 	"testing"
 	"unsafe"
 
@@ -59,5 +60,59 @@ func TestPostgresChildToken(t *testing.T) {
 	}
 	if err := cmd.Wait(); err != nil {
 		t.Fatalf("restricted database child failed: %v\n%s", err, output.String())
+	}
+}
+
+func TestRestrictedTokenCanReadPrivateTempFiles(t *testing.T) {
+	token, err := postgresToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer token.Close()
+	user, err := token.GetTokenUser()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var impersonation windows.Token
+	if err := windows.DuplicateTokenEx(token, windows.TOKEN_QUERY, nil,
+		windows.SecurityImpersonation, windows.TokenImpersonation, &impersonation); err != nil {
+		t.Fatal(err)
+	}
+	defer impersonation.Close()
+	// Model the actual Python temp ACL when its elevated creator's default
+	// owner is Administrators. AccessCheck models this even on a normal desktop.
+	acl := "O:BAG:BAD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;OW)"
+	for _, tt := range []struct {
+		name, sddl string
+		allowed    bool
+	}{
+		{"owner rights only", acl, false},
+		{"explicit token user", acl + "(A;OICI;FA;;;" + user.User.Sid.String() + ")", true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			sd, err := windows.SecurityDescriptorFromString(tt.sddl)
+			if err != nil {
+				t.Fatal(err)
+			}
+			mapping := struct{ read, write, execute, all uint32 }{
+				windows.FILE_GENERIC_READ, windows.FILE_GENERIC_WRITE,
+				windows.FILE_GENERIC_EXECUTE, windows.STANDARD_RIGHTS_REQUIRED | windows.SYNCHRONIZE | 0x1ff,
+			}
+			var privileges [1024]byte
+			size := uint32(len(privileges))
+			var granted, allowed uint32
+			check := windows.NewLazySystemDLL("advapi32.dll").NewProc("AccessCheck")
+			ok, _, callErr := check.Call(uintptr(unsafe.Pointer(sd)), uintptr(impersonation),
+				windows.FILE_GENERIC_READ|windows.FILE_GENERIC_EXECUTE, uintptr(unsafe.Pointer(&mapping)),
+				uintptr(unsafe.Pointer(&privileges[0])), uintptr(unsafe.Pointer(&size)),
+				uintptr(unsafe.Pointer(&granted)), uintptr(unsafe.Pointer(&allowed)))
+			runtime.KeepAlive(sd)
+			if ok == 0 {
+				t.Fatal(callErr)
+			}
+			if got := allowed != 0; got != tt.allowed {
+				t.Fatalf("restricted database read/execute access = %v, want %v", got, tt.allowed)
+			}
+		})
 	}
 }

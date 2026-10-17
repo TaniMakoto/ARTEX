@@ -1,5 +1,6 @@
 """Verify the shipped executable starts with no external database configured."""
 
+import csv
 import json
 import os
 from pathlib import Path
@@ -14,11 +15,33 @@ import urllib.request
 import zipfile
 
 
+def allow_current_user(directory):
+    # Python's private Windows temp ACL grants OWNER RIGHTS, not the token user.
+    # With an elevated parent the owner is Administrators. PostgreSQL disables
+    # that group, so its restricted child cannot load DLLs from this directory
+    # (STATUS_DLL_NOT_FOUND). Add only the actual user before extracting files.
+    # https://github.com/python/cpython/issues/157876
+    system32 = Path(os.environ["SystemRoot"]) / "System32"
+    identity = subprocess.check_output(
+        [str(system32 / "whoami.exe"), "/user", "/fo", "csv", "/nh"],
+        text=True,
+    )
+    sid = next(csv.reader(identity.splitlines()))[1]
+    if not sid.startswith("S-1-") or not all(part.isdigit() for part in sid.split("-")[1:]):
+        raise RuntimeError("Could not determine the Windows token user SID")
+    subprocess.run(
+        [str(system32 / "icacls.exe"), str(directory), "/grant", f"*{sid}:(OI)(CI)F"],
+        check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+    print(f"Private smoke workspace grants access to token user {sid}", flush=True)
+
+
 def main():
     # PostgreSQL's Windows build uses the system code page for paths. Its
     # installation/data paths must be ASCII; SQL data remains UTF-8.
     with tempfile.TemporaryDirectory(prefix="artex portable-") as temp:
         workspace = Path(temp)
+        allow_current_user(workspace)
         with zipfile.ZipFile(sys.argv[1]) as archive:
             archive.extractall(workspace)
         root = workspace / "artex-windows-amd64-portable"
@@ -28,6 +51,11 @@ def main():
         env = os.environ.copy()
         env.pop("ARTEX_PG_DSN", None)
         env.pop("ARTEX_POSTGRES_DIR", None)
+        # A portable package must not borrow DLLs from developer tools on PATH.
+        system_root = Path(os.environ["SystemRoot"])
+        env["PATH"] = os.pathsep.join(
+            [str(system_root / "System32"), str(system_root)]
+        )
         env["ARTEX_CONFIG"] = str(root / "config.json")
         env["ARTEX_SKILL_DIR"] = str(root / "skills")
         data = workspace / "persistent data"
